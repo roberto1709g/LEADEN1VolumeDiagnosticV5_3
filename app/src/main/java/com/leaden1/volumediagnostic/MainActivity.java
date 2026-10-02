@@ -192,6 +192,14 @@ public class MainActivity extends Activity {
         return super.onKeyDown(keyCode, event);
     }
 
+    private void updateStatus() {
+        if (isListenerEnabled()) {
+            statusView.setText("● ACCESO A NOTIFICACIONES ACTIVO\n");
+        } else {
+            statusView.setText("● ACCESO A NOTIFICACIONES NO ACTIVO\n");
+        }
+    }
+
     private void registerVolumeReceiver() {
         if (receiverRegistered) return;
         try {
