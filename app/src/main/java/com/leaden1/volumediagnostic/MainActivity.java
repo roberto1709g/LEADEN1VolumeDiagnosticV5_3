@@ -1,49 +1,337 @@
 package com.leaden1.volumediagnostic;
 
 import android.app.Activity;
-import android.content.*;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
-import android.media.session.*;
-import android.os.*;
+import android.media.session.MediaController;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.KeyEvent;
-import android.widget.*;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import androidx.core.content.ContextCompat;
+
 import java.text.SimpleDateFormat;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
- private AudioManager audioManager; private MediaSessionManager mediaSessionManager; private Handler handler;
- private TextView statusView,mediaView,volumeView,keyView,changeView,eventView,historyView;
- private int lastVolume=-1; private boolean receiverRegistered=false; private MediaController currentController; private final ArrayList<String> history=new ArrayList<>();
- private final MediaController.Callback mediaCallback=new MediaController.Callback(){
-  @Override public void onPlaybackStateChanged(PlaybackState state){if(state!=null) runOnUiThread(()->{String s=stateToString(state.getState()); updateMediaState(s); log("MEDIA_STATE_"+s);});}
-  @Override public void onMetadataChanged(MediaMetadata metadata){runOnUiThread(MainActivity.this::refreshCurrentController);}
-  @Override public void onSessionDestroyed(){runOnUiThread(()->{log("MEDIA_SESSION_DESTROYED");currentController=null;refreshSessions();});}
- };
- private final MediaSessionManager.OnActiveSessionsChangedListener sessionsListener=c->runOnUiThread(()->{log("ACTIVE_SESSIONS_CHANGED="+(c==null?0:c.size()));updateSessions(c);});
- private final BroadcastReceiver volumeReceiver=new BroadcastReceiver(){@Override public void onReceive(Context c,Intent i){int stream=i.getIntExtra(AudioManager.EXTRA_VOLUME_STREAM_TYPE,-1);if(stream==AudioManager.STREAM_MUSIC||stream==-1){int cur=audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);showVolumeChange("STREAM="+stream+" | VOL="+cur+" (PREV="+lastVolume+")");log("VOLUME_BROADCAST "+lastVolume+" -> "+cur);lastVolume=cur;updateVolume();}}};
- private final Runnable poller=new Runnable(){@Override public void run(){if(audioManager!=null){int cur=audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);if(lastVolume!=-1&&cur!=lastVolume){showVolumeChange("POLL VOL="+cur+" (PREV="+lastVolume+")");log("VOLUME_POLL "+lastVolume+" -> "+cur);}lastVolume=cur;updateVolume();}handler.postDelayed(this,250);}};
- @Override protected void onCreate(Bundle b){super.onCreate(b);audioManager=(AudioManager)getSystemService(AUDIO_SERVICE);mediaSessionManager=(MediaSessionManager)getSystemService(Context.MEDIA_SESSION_SERVICE);handler=new Handler(Looper.getMainLooper());buildUi();lastVolume=audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);log("APP_INICIADA_V5_3");registerVolumeReceiver();handler.post(poller);refreshSessions();}
- private void buildUi(){LinearLayout r=new LinearLayout(this);r.setOrientation(LinearLayout.VERTICAL);r.setPadding(32,24,32,24);statusView=make("● INICIALIZANDO");mediaView=make("MEDIA SESSION: —");volumeView=make("STREAM_MUSIC: —");keyView=make("ÚLTIMO KEY EVENT: —");changeView=make("ÚLTIMO CAMBIO: —");eventView=make("ÚLTIMO EVENTO: —");historyView=make("HISTORIAL\n");Button a=new Button(this);a.setText("ABRIR ACCESO A NOTIFICACIONES");a.setOnClickListener(v->openAccess());Button u=new Button(this);u.setText("ACTUALIZAR SESIONES");u.setOnClickListener(v->{log("MANUAL_REFRESH_SESIONES");refreshSessions();});Button cl=new Button(this);cl.setText("LIMPIAR HISTORIAL");cl.setOnClickListener(v->{history.clear();historyView.setText("HISTORIAL\n");});r.addView(statusView);r.addView(mediaView);r.addView(volumeView);r.addView(keyView);r.addView(changeView);r.addView(eventView);r.addView(a);r.addView(u);r.addView(cl);r.addView(historyView);setContentView(r);}
- private TextView make(String s){TextView v=new TextView(this);v.setText(s);v.setTextSize(16);v.setPadding(0,9,0,9);return v;}
- private void registerVolumeReceiver(){if(receiverRegistered)return;IntentFilter f=new IntentFilter();f.addAction("android.media.VOLUME_CHANGED_ACTION");f.addAction("android.media.STREAM_VOLUME_CHANGED_ACTION");try{ContextCompat.registerReceiver(this,volumeReceiver,f,ContextCompat.RECEIVER_EXPORTED);receiverRegistered=true;log("REGISTER_RECEIVER_OK");}catch(Exception e){log("REGISTER_RECEIVER_ERROR: "+e.getClass().getSimpleName()+": "+e.getMessage());}}
- @Override protected void onResume(){super.onResume();updateStatus();handler.postDelayed(this::refreshSessions,500);}
- @Override protected void onDestroy(){if(receiverRegistered){try{unregisterReceiver(volumeReceiver);}catch(Exception ignored){}receiverRegistered=false;}if(handler!=null)handler.removeCallbacks(poller);try{mediaSessionManager.removeOnActiveSessionsChangedListener(sessionsListener);}catch(Exception ignored){}if(currentController!=null)try{currentController.unregisterCallback(mediaCallback);}catch(Exception ignored){}super.onDestroy();}
- @Override public boolean dispatchKeyEvent(KeyEvent e){if(e.getAction()==KeyEvent.ACTION_DOWN){String n=KeyEvent.keyCodeToString(e.getKeyCode());keyView.setText("ÚLTIMO KEY EVENT: "+n+" ("+e.getKeyCode()+")");log("KEY_DOWN "+n+" ("+e.getKeyCode()+")");if(e.getKeyCode()==KeyEvent.KEYCODE_VOLUME_UP)setEvent("VOL_UP_DETECTADO");else if(e.getKeyCode()==KeyEvent.KEYCODE_VOLUME_DOWN)setEvent("VOL_DOWN_DETECTADO");else if(e.getKeyCode()==KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)setEvent("PLAY_PAUSE_KEY_DETECTADO");}return super.dispatchKeyEvent(e);}
- private void updateStatus(){if(isListenerEnabled())statusView.setText(MediaNotificationListener.isConnected()?"● MONITOR ACTIVO":"● ACCESO ACTIVO / ESPERANDO LISTENER");else statusView.setText("● ACCESO A NOTIFICACIONES NO ACTIVO");}
- private boolean isListenerEnabled(){String enabled=Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");if(enabled==null||enabled.isEmpty())return false;String expected=getListenerComponent().flattenToString();for(String c:enabled.split(":"))if(expected.equals(c))return true;return false;}
- private ComponentName getListenerComponent(){return new ComponentName(this,MediaNotificationListener.class);}
- private void registerSessionListener(){if(!isListenerEnabled())return;try{mediaSessionManager.addOnActiveSessionsChangedListener(sessionsListener,getListenerComponent());log("SESSION_LISTENER_REGISTRADO");}catch(SecurityException e){log("SESSION_LISTENER_SECURITY: "+e.getMessage());}catch(Exception e){log("SESSION_LISTENER_ERROR: "+e.getClass().getSimpleName()+": "+e.getMessage());}}
- private void refreshSessions(){updateStatus();if(!isListenerEnabled()){mediaView.setText("MEDIA SESSION: ACCESO NO DISPONIBLE\nActiva el acceso de notificaciones.");return;}try{registerSessionListener();List<MediaController> s=mediaSessionManager.getActiveSessions(getListenerComponent());log("SESIONES_ENCONTRADAS="+s.size());updateSessions(s);}catch(SecurityException e){mediaView.setText("MEDIA SESSION: SECURITY_EXCEPTION\n"+e.getMessage());log("SECURITY_EXCEPTION: "+e.getMessage());}catch(Exception e){mediaView.setText("MEDIA SESSION: ERROR\n"+e.getMessage());log("SESSION_ERROR: "+e.getClass().getSimpleName()+": "+e.getMessage());}}
- private void updateSessions(List<MediaController> s){if(s==null||s.isEmpty()){currentController=null;mediaView.setText("MEDIA SESSION: NINGUNA ACTIVA");return;}MediaController selected=null;for(MediaController c:s){PlaybackState st=c.getPlaybackState();if(st!=null&&st.getState()==PlaybackState.STATE_PLAYING){selected=c;break;}}if(selected==null)selected=s.get(0);if(currentController!=selected){if(currentController!=null)try{currentController.unregisterCallback(mediaCallback);}catch(Exception ignored){}currentController=selected;try{currentController.registerCallback(mediaCallback);}catch(Exception e){log("CALLBACK_ERROR: "+e.getMessage());}}refreshCurrentController();}
- private void refreshCurrentController(){if(currentController==null){mediaView.setText("MEDIA SESSION: NINGUNA ACTIVA");return;}PlaybackState st=currentController.getPlaybackState();String state=st==null?"—":stateToString(st.getState());String title="—",artist="—";MediaMetadata m=currentController.getMetadata();if(m!=null){CharSequence t=m.getText(MediaMetadata.METADATA_KEY_TITLE),a=m.getText(MediaMetadata.METADATA_KEY_ARTIST);if(t!=null)title=t.toString();if(a!=null)artist=a.toString();}mediaView.setText("MEDIA SESSION: "+currentController.getPackageName()+"\nESTADO: "+state+"\nTITULO: "+title+"\nARTISTA: "+artist);}
- private void updateMediaState(String s){refreshCurrentController();if("PLAYING".equals(s)||"PAUSED".equals(s))setEvent("PLAY_PAUSE_DETECTADO");}
- private String stateToString(int s){switch(s){case PlaybackState.STATE_PLAYING:return "PLAYING";case PlaybackState.STATE_PAUSED:return "PAUSED";case PlaybackState.STATE_BUFFERING:return "BUFFERING";case PlaybackState.STATE_STOPPED:return "STOPPED";case PlaybackState.STATE_NONE:return "NONE";default:return String.valueOf(s);}}
- private void updateVolume(){int c=audioManager.getStreamVolume(AudioManager.STREAM_MUSIC),m=audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);volumeView.setText("STREAM_MUSIC: "+c+" / "+m);}
- private void showVolumeChange(String s){changeView.setText("ÚLTIMO CAMBIO: "+s);}
- private void setEvent(String e){eventView.setText("ÚLTIMO EVENTO: "+e);log(e);}
- private void openAccess(){try{log("ABRIENDO_ACCESO_NOTIFICACIONES");startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));}catch(Exception e){log("ERROR_ABRIENDO_ACCESO: "+e.getMessage());}}
- private void log(String s){String t=new SimpleDateFormat("HH:mm:ss.SSS",Locale.getDefault()).format(new Date());history.add(0,t+" "+s);while(history.size()>60)history.remove(history.size()-1);if(historyView!=null){StringBuilder b=new StringBuilder("HISTORIAL\n");for(String x:history)b.append(x).append('\n');historyView.setText(b.toString());}}
+
+    private TextView statusView, mediaView, volumeView, keyEventView, volumeChangeView, historyView;
+    private AudioManager audioManager;
+    private MediaSessionManager mediaSessionManager;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private int lastVolume = -1;
+    private boolean receiverRegistered = false;
+    private MediaController currentController;
+    private final ArrayList<String> history = new ArrayList<>();
+
+    private final MediaController.Callback mediaCallback = new MediaController.Callback() {
+        @Override
+        public void onPlaybackStateChanged(PlaybackState state) {
+            if (state != null) {
+                runOnUiThread(() -> {
+                    String s = stateToString(state.getState());
+                    updateMediaState(s);
+                    log("MEDIA_STATE_" + s);
+                });
+            }
+        }
+
+        @Override
+        public void onMetadataChanged(MediaMetadata metadata) {
+            runOnUiThread(MainActivity.this::refreshCurrentController);
+        }
+
+        @Override
+        public void onSessionDestroyed() {
+            runOnUiThread(() -> {
+                log("MEDIA_SESSION_DESTROYED");
+                currentController = null;
+                refreshSessions();
+            });
+        }
+    };
+
+    private final BroadcastReceiver volumeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            int stream = i.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1);
+            if (stream == AudioManager.STREAM_MUSIC || stream == -1) {
+                int cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                showVolumeChange("STREAM=" + stream + " | VOL=" + cur + " (PREV=" + lastVolume + ")");
+                log("VOLUME_BROADCAST " + lastVolume + " -> " + cur);
+                lastVolume = cur;
+                updateVolume();
+            }
+        }
+    };
+
+    private final Runnable volumePoller = new Runnable() {
+        @Override
+        public void run() {
+            updateVolume();
+            handler.postDelayed(this, 250);
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        mediaSessionManager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
+
+        LinearLayout mainLayout = new LinearLayout(this);
+        mainLayout.setOrientation(LinearLayout.VERTICAL);
+        mainLayout.setPadding(32, 48, 32, 48);
+
+        TextView titleView = new TextView(this);
+        titleView.setText("LEADEN1 Volume Diagnostic V5.3\n");
+        titleView.setTextSize(18f);
+
+        statusView = new TextView(this);
+        mediaView = new TextView(this);
+        volumeView = new TextView(this);
+        keyEventView = new TextView(this);
+        volumeChangeView = new TextView(this);
+
+        keyEventView.setText("ÚLTIMO KEY EVENT: —");
+        volumeChangeView.setText("ÚLTIMO CAMBIO: —");
+
+        Button btnNotificationAccess = new Button(this);
+        btnNotificationAccess.setText("ABRIR ACCESO A NOTIFICACIONES");
+        btnNotificationAccess.setOnClickListener(v -> {
+            log("ABRIENDO_ACCESO_NOTIFICACIONES");
+            try {
+                startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+            } catch (Exception e) {
+                startActivity(new Intent(Settings.ACTION_SETTINGS));
+            }
+        });
+
+        Button btnRefreshSessions = new Button(this);
+        btnRefreshSessions.setText("ACTUALIZAR SESIONES");
+        btnRefreshSessions.setOnClickListener(v -> {
+            log("MANUAL_REFRESH_SESIONES");
+            refreshSessions();
+        });
+
+        Button btnClearHistory = new Button(this);
+        btnClearHistory.setText("LIMPIAR HISTORIAL");
+        btnClearHistory.setOnClickListener(v -> {
+            history.clear();
+            historyView.setText("");
+        });
+
+        TextView historyTitle = new TextView(this);
+        historyTitle.setText("\nHISTORIAL");
+
+        historyView = new TextView(this);
+        historyView.setTextSize(12f);
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.addView(historyView);
+
+        mainLayout.addView(titleView);
+        mainLayout.addView(statusView);
+        mainLayout.addView(mediaView);
+        mainLayout.addView(volumeView);
+        mainLayout.addView(keyEventView);
+        mainLayout.addView(volumeChangeView);
+        mainLayout.addView(btnNotificationAccess);
+        mainLayout.addView(btnRefreshSessions);
+        mainLayout.addView(btnClearHistory);
+        mainLayout.addView(historyTitle);
+        mainLayout.addView(scrollView);
+
+        setContentView(mainLayout);
+
+        registerVolumeReceiver();
+        handler.post(volumePoller);
+        log("APP_INICIADA_V5_3");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshSessions();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        handler.removeCallbacks(volumePoller);
+        if (receiverRegistered) {
+            try {
+                unregisterReceiver(volumeReceiver);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            String name = (keyCode == KeyEvent.KEYCODE_VOLUME_UP) ? "VOL_UP" : "VOL_DOWN";
+            keyEventView.setText("ÚLTIMO KEY EVENT: " + name);
+            log("KEY_DOWN: " + name);
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    private void registerVolumeReceiver() {
+        if (receiverRegistered) return;
+        try {
+            IntentFilter filter = new IntentFilter("android.media.VOLUME_CHANGED_ACTION");
+            ContextCompat.registerReceiver(this, volumeReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
+            receiverRegistered = true;
+            log("RECEIVER_REGISTRADO_OK");
+        } catch (Exception e) {
+            log("REGISTER_RECEIVER_ERROR: " + e.getMessage());
+        }
+    }
+
+    private void updateVolume() {
+        if (audioManager == null) return;
+        int current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        if (lastVolume != current) {
+            if (lastVolume != -1) {
+                log("POLL_VOL_CHANGE: " + lastVolume + " -> " + current);
+            }
+            lastVolume = current;
+        }
+        volumeView.setText("STREAM_MUSIC: " + current + " / " + max);
+    }
+
+    private void refreshSessions() {
+        updateStatus();
+        if (!isListenerEnabled()) {
+            mediaView.setText("MEDIA SESSION: ACCESO NO DISPONIBLE\nActiva el acceso de notificaciones.");
+            return;
+        }
+        try {
+            List<MediaController> sessions = mediaSessionManager.getActiveSessions(getListenerComponent());
+            log("SESIONES_ENCONTRADAS=" + sessions.size());
+            updateSessions(sessions);
+        } catch (SecurityException e) {
+            mediaView.setText("MEDIA SESSION: SECURITY_EXCEPTION\n" + e.getMessage());
+            log("SECURITY_EXCEPTION: " + e.getMessage());
+        } catch (Exception e) {
+            mediaView.setText("MEDIA SESSION: ERROR\n" + e.getMessage());
+            log("SESSION_ERROR: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    private void updateSessions(List<MediaController> sessions) {
+        if (sessions == null || sessions.isEmpty()) {
+            currentController = null;
+            mediaView.setText("MEDIA SESSION: NINGUNA ACTIVA");
+            return;
+        }
+        MediaController selected = null;
+        for (MediaController c : sessions) {
+            PlaybackState st = c.getPlaybackState();
+            if (st != null && st.getState() == PlaybackState.STATE_PLAYING) {
+                selected = c;
+                break;
+            }
+        }
+        if (selected == null) selected = sessions.get(0);
+
+        if (currentController != selected) {
+            if (currentController != null) {
+                try {
+                    currentController.unregisterCallback(mediaCallback);
+                } catch (Exception ignored) {}
+            }
+            currentController = selected;
+            try {
+                currentController.registerCallback(mediaCallback);
+            } catch (Exception e) {
+                log("CALLBACK_ERROR: " + e.getMessage());
+            }
+        }
+        refreshCurrentController();
+    }
+
+    private void refreshCurrentController() {
+        if (currentController == null) {
+            mediaView.setText("MEDIA SESSION: NINGUNA ACTIVA");
+            return;
+        }
+        String pkg = currentController.getPackageName();
+        PlaybackState state = currentController.getPlaybackState();
+        String stateStr = state == null ? "UNKNOWN" : stateToString(state.getState());
+
+        String title = "—";
+        String artist = "—";
+        if (currentController.getMetadata() != null) {
+            CharSequence t = currentController.getMetadata().getText(MediaMetadata.METADATA_KEY_TITLE);
+            CharSequence a = currentController.getMetadata().getText(MediaMetadata.METADATA_KEY_ARTIST);
+            if (t != null) title = t.toString();
+            if (a != null) artist = a.toString();
+        }
+
+        mediaView.setText("MEDIA SESSION: " + pkg + "\nTÍTULO: " + title + "\nARTISTA: " + artist + "\nESTADO: " + stateStr);
+    }
+
+    private void updateMediaState(String stateStr) {
+        if (currentController == null) return;
+        String pkg = currentController.getPackageName();
+        String title = "—";
+        if (currentController.getMetadata() != null) {
+            CharSequence t = currentController.getMetadata().getText(MediaMetadata.METADATA_KEY_TITLE);
+            if (t != null) title = t.toString();
+        }
+        mediaView.setText("MEDIA SESSION: " + pkg + "\nTÍTULO: " + title + "\nESTADO: " + stateStr);
+    }
+
+    private boolean isListenerEnabled() {
+        String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        return flat != null && flat.contains(getPackageName());
+    }
+
+    private ComponentName getListenerComponent() {
+        return new ComponentName(this, MediaNotificationListener.class);
+    }
+
+    private void showVolumeChange(String info) {
+        volumeChangeView.setText("ÚLTIMO CAMBIO: " + info);
+    }
+
+    private String stateToString(int state) {
+        switch (state) {
+            case PlaybackState.STATE_PLAYING: return "PLAYING";
+            case PlaybackState.STATE_PAUSED: return "PAUSED";
+            case PlaybackState.STATE_STOPPED: return "STOPPED";
+            case PlaybackState.STATE_BUFFERING: return "BUFFERING";
+            default: return "STATE_" + state;
+        }
+    }
+
+    private void log(String msg) {
+        String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date());
+        history.add(0, time + "  " + msg);
+        StringBuilder sb = new StringBuilder();
+        for (String item : history) {
+            sb.append(item).append("\n");
+        }
+        if (historyView != null) {
+            historyView.setText(sb.toString());
+        }
+    }
 }
